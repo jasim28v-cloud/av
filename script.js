@@ -3,25 +3,58 @@ import { auth, database, CLOUDINARY_CLOUD_NAME, CLOUDINARY_UPLOAD_PRESET } from 
 import { ref, set, onValue, push, remove, update, get } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 import { onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
-const ADMIN_EMAIL = 'jasim28v@gmail.com';
+const ADMIN_EMAIL = 'jasim28v@gmail.com'; // بدليه لو الإيميل مختلف
 let currentUser = null;
 let isAdmin = false;
 let currentVideoId = null;
 let plyrInstance = null;
 
-// ========== روابط التواصل - راح ترسليها وأنا أحطها ==========
-const SOCIAL_LINKS = {
-    instagram: 'https://instagram.com/vidora.official', // بدلي هذا
-    tiktok: 'https://tiktok.com/@vidora.official',     // بدلي هذا
-    youtube: 'https://youtube.com/@vidora',            // بدلي هذا
-    x: 'https://x.com/vidora'                          // بدلي هذا
+// ========== إعدادات الموقع ==========
+const DEFAULT_SOCIAL_LINKS = {
+    instagram: 'https://instagram.com/',
+    tiktok: 'https://tiktok.com/',
+    youtube: 'https://youtube.com/',
+    x: 'https://x.com/'
 };
 
-// تحديث الروابط في الفوتر
-document.getElementById('instagramLink').href = SOCIAL_LINKS.instagram;
-document.getElementById('tiktokLink').href = SOCIAL_LINKS.tiktok;
-document.getElementById('youtubeLink').href = SOCIAL_LINKS.youtube;
-document.getElementById('xLink').href = SOCIAL_LINKS.x;
+function loadSiteSettings() {
+    const settingsRef = ref(database, 'siteSettings/socialLinks');
+    onValue(settingsRef, (snapshot) => {
+        const links = snapshot.val() || DEFAULT_SOCIAL_LINKS;
+        document.getElementById('instagramLink').href = links.instagram || '#';
+        document.getElementById('tiktokLink').href = links.tiktok || '#';
+        document.getElementById('youtubeLink').href = links.youtube || '#';
+        document.getElementById('xLink').href = links.x || '#';
+        
+        if (isAdmin) {
+            document.getElementById('adminInstagram').value = links.instagram || '';
+            document.getElementById('adminTiktok').value = links.tiktok || '';
+            document.getElementById('adminYoutube').value = links.youtube || '';
+            document.getElementById('adminX').value = links.x || '';
+        }
+    });
+}
+
+window.saveSocialLinks = async () => {
+    if (!isAdmin) {
+        showToast('غير مصرح لك', 'error');
+        return;
+    }
+    
+    const links = {
+        instagram: document.getElementById('adminInstagram').value.trim(),
+        tiktok: document.getElementById('adminTiktok').value.trim(),
+        youtube: document.getElementById('adminYoutube').value.trim(),
+        x: document.getElementById('adminX').value.trim()
+    };
+    
+    try {
+        await set(ref(database, 'siteSettings/socialLinks'), links);
+        showToast('تم حفظ الإعدادات بنجاح!', 'success');
+    } catch (error) {
+        showToast('خطأ في الحفظ: ' + error.message, 'error');
+    }
+};
 
 // DOM Elements
 const videoGrid = document.getElementById('videoGrid');
@@ -172,6 +205,7 @@ onAuthStateChanged(auth, async (user) => {
     
     loadVideos();
     updateFooterStats();
+    loadSiteSettings();
 });
 
 document.getElementById('logoutBtn').addEventListener('click', () => {
@@ -251,7 +285,7 @@ function loadAdminData() {
     });
 }
 
-// ========== Load Videos (عام - كل الزوار يشوفون) ==========
+// ========== Load Videos ==========
 function loadVideos() {
     const videosRef = ref(database, 'videos');
     onValue(videosRef, (snapshot) => {
@@ -266,7 +300,7 @@ function loadVideos() {
         const videoArray = Object.entries(videos)
             .map(([id, video]) => ({ id, ...video }))
             .filter(video => video.visible !== false)
-            .reverse();
+            .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)); // ترتيب تنازلي حسب الأحدث
         
         videoArray.forEach(video => {
             const canDelete = isAdmin || video.uploadedBy === currentUser?.uid;
@@ -280,7 +314,7 @@ function loadVideos() {
                 </div>
                 <div class="card-info">
                     <div class="video-title">
-                        <i class="fas fa-play-circle" style="color: #ff4081;"></i>
+                        <i class="fas fa-play-circle" style="color: var(--primary);"></i>
                         ${video.title || 'بدون عنوان'}
                     </div>
                     <div class="video-meta">
@@ -316,16 +350,13 @@ window.openVideoModal = (video) => {
     modalLikesCount.textContent = video.likes || 0;
     commentsCount.textContent = video.comments ? Object.keys(video.comments).length : 0;
     
-    // التحكم في ظهور رسالة "سجل دخولك" للزوار
     if (!currentUser) {
         loginPromptMessage.style.display = 'flex';
         commentFormContainer.style.display = 'none';
-        modalLikeBtn.style.cursor = 'pointer';
     } else {
         loginPromptMessage.style.display = 'none';
         commentFormContainer.style.display = 'block';
         
-        // Check if user liked
         const userLikeRef = ref(database, `videos/${video.id}/likedBy/${currentUser.uid}`);
         get(userLikeRef).then(snapshot => {
             if (snapshot.exists()) {
@@ -338,7 +369,6 @@ window.openVideoModal = (video) => {
         });
     }
     
-    // Initialize Plyr
     if (plyrInstance) plyrInstance.destroy();
     plyrInstance = new Plyr(modalVideo, {
         controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'pip', 'fullscreen'],
@@ -346,10 +376,7 @@ window.openVideoModal = (video) => {
     });
     modalVideo.src = video.url;
     
-    // Load comments
     loadComments(video.id);
-    
-    // Increment views
     update(ref(database, `videos/${video.id}`), { views: (video.views || 0) + 1 });
 };
 
@@ -363,7 +390,6 @@ window.closeVideoModal = () => {
     currentVideoId = null;
 };
 
-// ========== التعامل مع الإعجاب (للزوار يظهر لهم رسالة) ==========
 window.handleLike = () => {
     if (!currentUser) {
         showToast('سجل دخولك للإعجاب بالفيديو', 'warning');
@@ -437,7 +463,7 @@ function loadComments(videoId) {
             return;
         }
         
-        const commentsArray = Object.entries(comments).reverse();
+        const commentsArray = Object.entries(comments).sort((a, b) => b[1].timestamp - a[1].timestamp);
         commentsCount.textContent = commentsArray.length;
         
         commentsArray.forEach(([id, comment]) => {
@@ -523,7 +549,7 @@ window.deleteMember = async (uid) => {
     showToast('تم حذف العضو', 'success');
 };
 
-// ========== Upload Video (للمسجلين فقط) ==========
+// ========== Upload Video ==========
 uploadBtn.addEventListener('click', async () => {
     if (!currentUser) {
         showToast('سجل دخولك لرفع الفيديوهات', 'warning');
